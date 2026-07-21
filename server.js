@@ -3,10 +3,24 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { getWindResponse } = require("./lib/wind");
+const { getWindResponse, getSpotList, DEFAULT_STATION_CODE } = require("./lib/wind");
+const { parsePolarFromPdfBuffer } = require("./lib/orcParser");
 
 const PORT = process.env.PORT || 3000;
-const PUBLIC_DIR = path.join(__dirname, "public");
+const ROOT_DIR = __dirname;
+
+// De statische app-bestanden staan in de project-root (zelfde plek als Vercel ze verwacht
+// zonder buildstap). Alleen dit vaste lijstje wordt geserveerd, zodat server.js/lib/api/
+// package.json etc. nooit per ongeluk als bestand opvraagbaar zijn.
+const ALLOWED_FILES = new Set([
+  "index.html",
+  "style.css",
+  "app.js",
+  "polar.js",
+  "manifest.json",
+  "sw.js",
+  "icons/icon.svg",
+]);
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -21,13 +35,14 @@ const MIME_TYPES = {
 function serveStatic(req, res) {
   const urlPath = decodeURIComponent(req.url.split("?")[0]);
   const relPath = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
-  const filePath = path.normalize(path.join(PUBLIC_DIR, relPath));
 
-  if (!filePath.startsWith(PUBLIC_DIR)) {
-    res.writeHead(403);
-    res.end("Forbidden");
+  if (!ALLOWED_FILES.has(relPath)) {
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end("Not found");
     return;
   }
+
+  const filePath = path.join(ROOT_DIR, relPath);
 
   fs.readFile(filePath, (err, data) => {
     if (err) {
@@ -41,13 +56,51 @@ function serveStatic(req, res) {
   });
 }
 
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.url.startsWith("/api/wind")) {
-    const { status, body } = await getWindResponse();
+    const url = new URL(req.url, "http://x");
+    const station = url.searchParams.get("station") || DEFAULT_STATION_CODE;
+    const { status, body } = await getWindResponse(station);
     res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(body));
     return;
   }
+
+  if (req.url.startsWith("/api/spots")) {
+    try {
+      const spots = await getSpotList();
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ spots }));
+    } catch (err) {
+      res.writeHead(502, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: "Kan spotlijst niet ophalen: " + err.message }));
+    }
+    return;
+  }
+
+  if (req.url.startsWith("/api/parse-orc") && req.method === "POST") {
+    try {
+      const buffer = await readRawBody(req);
+      if (!buffer.length) throw new Error("Geen bestand ontvangen");
+      const polar = await parsePolarFromPdfBuffer(buffer);
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(polar));
+    } catch (err) {
+      res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: err.message || "Kon PDF niet verwerken" }));
+    }
+    return;
+  }
+
   serveStatic(req, res);
 });
 
