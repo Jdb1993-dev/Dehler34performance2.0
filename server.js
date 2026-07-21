@@ -1,62 +1,56 @@
-const express = require("express");
+// Lokale/self-hosted server, zonder framework-dependencies (puur Node http),
+// zodat er niets is dat Vercel's auto-detectie op het verkeerde spoor kan zetten.
+const http = require("http");
+const fs = require("fs");
 const path = require("path");
+const { getWindResponse } = require("./lib/wind");
 
-const app = express();
 const PORT = process.env.PORT || 3000;
+const PUBLIC_DIR = path.join(__dirname, "public");
 
-const STATION_CODE = "6258"; // Trintelhaven Houtribdijk
-const UPSTREAM_URL = () =>
-  `https://www.actuelewind.nl/api/getSpotOverview.php?t=web&p=web&ss=0&${Date.now()}`;
-const MS_TO_KN = 1.943844;
-const CACHE_TTL_MS = 55_000; // upstream itself is cached max-age=60s
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+};
 
-let cache = { data: null, fetchedAt: 0 };
+function serveStatic(req, res) {
+  const urlPath = decodeURIComponent(req.url.split("?")[0]);
+  const relPath = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
+  const filePath = path.normalize(path.join(PUBLIC_DIR, relPath));
 
-async function fetchWind() {
-  const now = Date.now();
-  if (cache.data && now - cache.fetchedAt < CACHE_TTL_MS) {
-    return { ...cache.data, stale: false, ageSeconds: Math.round((now - cache.fetchedAt) / 1000) };
+  if (!filePath.startsWith(PUBLIC_DIR)) {
+    res.writeHead(403);
+    res.end("Forbidden");
+    return;
   }
 
-  const res = await fetch(UPSTREAM_URL(), {
-    headers: { "User-Agent": "Mozilla/5.0 (dehler-performance-app)" },
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
+      return;
+    }
+    const ext = path.extname(filePath);
+    res.writeHead(200, { "Content-Type": MIME_TYPES[ext] || "application/octet-stream" });
+    res.end(data);
   });
-  if (!res.ok) throw new Error(`upstream status ${res.status}`);
-  const json = await res.json();
-  const spot = json.wind && json.wind[STATION_CODE];
-  if (!spot || !spot.winddata || !spot.winddata.length) {
-    throw new Error("spot data ontbreekt in upstream response");
-  }
-  const latest = spot.winddata[0];
-
-  const result = {
-    spotnaam: spot.windspot.spotnaam,
-    speedKn: Math.round(latest.windsnelheidMS * MS_TO_KN * 10) / 10,
-    gustKn: latest.windstotenMS != null ? Math.round(latest.windstotenMS * MS_TO_KN * 10) / 10 : null,
-    dirDeg: latest.windrichtingGR,
-    dirText: latest.windrichting,
-    stationTimestamp: latest.tijdstip,
-  };
-
-  cache = { data: result, fetchedAt: now };
-  return { ...result, stale: false, ageSeconds: 0 };
 }
 
-app.get("/api/wind", async (req, res) => {
-  try {
-    const data = await fetchWind();
-    res.json(data);
-  } catch (err) {
-    if (cache.data) {
-      res.json({ ...cache.data, stale: true, ageSeconds: Math.round((Date.now() - cache.fetchedAt) / 1000), error: err.message });
-    } else {
-      res.status(502).json({ error: "Kan winddata niet ophalen: " + err.message });
-    }
+const server = http.createServer(async (req, res) => {
+  if (req.url.startsWith("/api/wind")) {
+    const { status, body } = await getWindResponse();
+    res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify(body));
+    return;
   }
+  serveStatic(req, res);
 });
 
-app.use(express.static(path.join(__dirname, "public")));
-
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Dehler performance app draait op http://localhost:${PORT}`);
 });
