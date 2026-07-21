@@ -1,0 +1,17 @@
+{
+  "name": "dehler-performance",
+  "version": "1.0.0",
+  "description": "Performance-app voor Dehler Optima 106: vergelijkt GPS-snelheid met polar-target snelheid, wind live van actuelewind.nl",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
