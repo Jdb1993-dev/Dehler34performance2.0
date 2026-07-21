@@ -9,7 +9,13 @@ Webapp (PWA) die op je telefoon laat zien hoe goed de Dehler Optima 106 het doet
 
 ## Waarom een server nodig is
 
-actuelewind.nl heeft geen officiële publieke API en staat geen cross-origin requests toe (geen CORS-headers). Daarom draait er een klein Node/Express-servertje (`server.js`) dat de winddata ophaalt en doorgeeft aan de app (`/api/wind`). De server cachet 55 sec, in lijn met de cache van actuelewind.nl zelf, om ze niet te overvragen.
+actuelewind.nl heeft geen officiële publieke API en staat geen cross-origin requests toe (geen CORS-headers). Daarom draait er een klein servertje dat de winddata ophaalt en doorgeeft aan de app (`/api/wind`), gecached voor 55 sec in lijn met actuelewind.nl zelf.
+
+De gedeelde ophaal-logica staat in `lib/wind.js` (geen dependencies, puur `fetch`). Die wordt op twee manieren aangeroepen:
+- `server.js` — plain Node `http`-server, voor lokaal draaien of hosten op bv. Render.
+- `api/wind.js` — Vercel serverless functie, voor de Vercel-deploy.
+
+Bewust **geen Express of andere dependencies**: de eerste Vercel-deploy faalde met `Error: No entrypoint found which imports express` omdat Vercel bij het zien van `express` in `package.json` automatisch probeerde te raden welk bestand de Express-app was, en de mist inging. Zonder dat soort dependencies heeft Vercel niets te raden.
 
 ## Lokaal draaien
 
